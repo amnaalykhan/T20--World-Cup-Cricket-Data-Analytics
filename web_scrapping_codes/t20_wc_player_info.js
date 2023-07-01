@@ -1,149 +1,93 @@
-/* -------------- STAGE 1 ------------ */
+import scrapy
 
-//------- 1.a Interaction Code ------ //
+class CricketSpider(scrapy.Spider):
+    name = 'cricket'
 
-navigate('https://stats.espncricinfo.com/ci/engine/records/team/match_results.html?id=14450;type=tournament');
+    # -------------- STAGE 1 ------------
 
-let links = parse().matchSummaryLinks;
-for(let i of links) { 
-  next_stage({url: i}) 
-}
+    def start_requests(self):
+        url = 'https://stats.espncricinfo.com/ci/engine/records/team/match_results.html?id=14450;type=tournament'
+        yield scrapy.Request(url=url, callback=self.parse_match_summary_links)
 
+    def parse_match_summary_links(self, response):
+        # Step 1: Create a list to store match summary links
+        matchSummaryLinks = []
 
-//------- 1.b Parser Code ------------//
-let links = []
-const allRows = $('table.engineTable > tbody > tr.data1');
- allRows.each((index, element) => {
-  const tds = $(element).find('td');
-  const rowURL = "https://www.espncricinfo.com" +$(tds[6]).find('a').attr('href');
-  links.push(rowURL);
- })
-return {
-  'matchSummaryLinks': links
-};
+        # Step 2: Selecting all rows from the target table
+        allRows = response.css('table.engineTable > tbody > tr.data1')
 
-/* ------------ STAGE 2 -------------- */
+        # Step 3: Loop through each row and extract the URL
+        for row in allRows:
+            rowURL = response.urljoin(row.css('td:nth-child(7) a::attr(href)').get())
+            matchSummaryLinks.append(rowURL)
 
-//------- 2.a Interaction Code ------ //
-navigate(input.url);
+            # Step 4: Yield a request for the match summary page
+            yield scrapy.Request(url=rowURL, callback=self.parse_players_data)
 
-
-let playersData = parse().playersData;
-for(let obj of playersData) { 
-  name = obj['name']
-  team = obj['team']
-  url = obj['link']
-  next_stage({name: name, team: team, url: url}) 
-}
-
-//---------- 2.b Parser Code ---------//
-//to store all the players in a list
-var playersLinks = []
-
-var match = $('div').filter(function(){
-	return $(this)
-      .find('span > span > span').text() === String("Match Details") 
-}).siblings()
-team1 = $(match.eq(0)).find('span > span > span').text().replace(" Innings", "")
-team2 = $(match.eq(1)).find('span > span > span').text().replace(" Innings", "")
+        # Step 5: Return the match summary links
+        yield {
+            'matchSummaryLinks': matchSummaryLinks
+        }
 
 
-//for batting players
-var tables = $('div > table.ci-scorecard-table');
-var firstInningRows = $(tables.eq(0)).find('tbody > tr').filter(function(index, element){
-  return $(this).find("td").length >= 8
-})
+    # ------------ STAGE 2 --------------
 
-var secondInningsRows = $(tables.eq(1)).find('tbody > tr').filter(function(index, element){
-  return $(this).find("td").length >= 8
-});
+    def parse_players_data(self, response):
+        # Step 1: Extract team names
+        team1 = response.css('div:contains("Match Details") span:nth-child(1)::text').get().replace(" Innings", "")
+        team2 = response.css('div:contains("Match Details") span:nth-child(2)::text').get().replace(" Innings", "")
 
-firstInningRows.each((index, element) => {
-  var tds = $(element).find('td');
-  playersLinks.push({
-  		"name": $(tds.eq(0)).find('a > span > span').text().replace(' ', ''),
-    	"team": team1,
-    	"link": "https://www.espncricinfo.com" + $(tds.eq(0)).find('a').attr('href')  
-  });
-});
+        # Step 2: Extract batting players' data
+        battingPlayers = response.css('div > table.ci-scorecard-table:nth-child(1) tbody tr:has(td:nth-child(8))')
+        playersData = []
+        for player in battingPlayers:
+            name = player.css('td:nth-child(1) a span span::text').get().replace(' ', '')
+            link = response.urljoin(player.css('td:nth-child(1) a::attr(href)').get())
+            playersData.append({
+                'name': name,
+                'team': team1,
+                'link': link
+            })
 
-secondInningsRows.each((index, element) => {
-  var tds = $(element).find('td');
-   playersLinks.push({
-  		"name": $(tds.eq(0)).find('a > span > span').text().replace(' ', ''),
-     	"team": team2,
-     	"link": "https://www.espncricinfo.com" + $(tds.eq(0)).find('a').attr('href')  
-  });
-});
+        # Step 3: Extract bowling players' data
+        bowlingPlayers = response.css('div > table.ds-table:nth-child(2) tbody tr:has(td:nth-child(11))')
+        for player in bowlingPlayers:
+            name = player.css('td:nth-child(1) a span::text').get().replace(' ', '')
+            link = response.urljoin(player.css('td:nth-child(1) a::attr(href)').get())
+            playersData.append({
+                'name': name,
+                'team': team2,
+                'link': link
+            })
 
-//for bowling players 
+        # Step 4: Yield requests for player details
+        for player in playersData:
+            yield scrapy.Request(url=player['link'], callback=self.parse_player_details, meta=player)
 
-var tables = $('div > table.ds-table');
-var firstInningRows = $(tables.eq(1)).find('tbody > tr').filter(function(index, element){
-  return $(this).find("td").length >= 11
-})
+    def parse_player_details(self, response):
+        # Step 5: Extract player details
+        name = response.meta['name']
+        team = response.meta['team']
+        battingStyle = response.css('div:contains("Batting Style") span::text').get()
+        bowlingStyle = response.css('div:contains("Bowling Style") span::text').get()
+        playingRole = response.css('div:contains("Playing Role") span::text').get()
+        description = response.css('div.ci-player-bio-content p::text').get()
 
-var secondInningsRows = $(tables.eq(3)).find('tbody > tr').filter(function(index, element){
-  return $(this).find("td").length >= 11
-});
-
-
-firstInningRows.each((index, element) => {
-  var tds = $(element).find('td');
-  playersLinks.push({
-   		"name": $(tds.eq(0)).find('a > span').text().replace(' ', ''),
-    	"team": team2.replace(" Innings", ""),
-    	"link": "https://www.espncricinfo.com" + $(tds.eq(0)).find('a').attr('href')  
-    	
-  });
-});
-
-secondInningsRows.each((index, element) => {
-  var tds = $(element).find('td');
-   playersLinks.push({
-  		"name": $(tds.eq(0)).find('a > span').text().replace(' ', ''),
-    	"team": team1.replace(" Innings", ""),
-    	"link": "https://www.espncricinfo.com" + $(tds.eq(0)).find('a').attr('href')
-  });
-});
-  
-return {"playersData": playersLinks}
- 
- 
-/* ------------- STAGE 3 ------------ */
-
-//------- 3.a Interaction Code ------ //
-
-navigate(input.url);
-final_data = parse()
-collect(
-{
- "name": input.name,
-  "team": input.team,
-  "battingStyle": final_data.battingStyle,
-  "bowlingStyle": final_data.bowlingStyle,
-  "playingRole":  final_data.playingRole,
-  "description": final_data.content,
-});
- 
-//---------- 3.b Parser Code ---------//
-const battingStyle = $('div.ds-grid > div').filter(function(index){
-    return $(this).find('p').first().text() === String('Batting Style')
-  })
-
-const bowlingStyle = $('div.ds-grid > div').filter(function(index){
-    return $(this).find('p').first().text() === String('Bowling Style')
-  })
-
-const playingRole = $('div.ds-grid > div').filter(function(index){
-    return $(this).find('p').first().text() === String('Playing Role')
-  })
+        # Step 6: Return the player details
+        yield {
+            'name': name,
+            'team': team,
+            'battingStyle': battingStyle,
+            'bowlingStyle': bowlingStyle,
+            'playingRole': playingRole,
+            'description': description
+        }
 
 
+# Run the spider
+if __name__ == '__main__':
+    from scrapy.crawler import CrawlerProcess
 
- return {
-  	"battingStyle": battingStyle.find('span').text(),
-   "bowlingStyle": bowlingStyle.find('span').text(),
-   "playingRole": playingRole.find('span').text(),
-   "content": $('div.ci-player-bio-content').find('p').first().text()
-}
+    process = CrawlerProcess()
+    process.crawl(CricketSpider)
+    process.start()
